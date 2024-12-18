@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  replica1:
+    build: .
+    ports:
+      - "8081:8080"
+    environment:
+      - REPLICAS=replica2:8080,replica3:8080
+      - NODE_ID=1
+    networks:
+      - crdt_network
+
+  replica2:
+    build: .
+    ports:
+      - "8082:8080"
+    environment:
+      - REPLICAS=replica1:8080,replica3:8080
+      - NODE_ID=2
+    networks:
+      - crdt_network
+
+  replica3:
+    build: .
+    ports:
+      - "8083:8080"
+    environment:
+      - REPLICAS=replica1:8080,replica2:8080
+      - NODE_ID=3
+    networks:
+      - crdt_network
+
+networks:
+  crdt_network:
+    driver: bridge
