@@ -60,18 +60,25 @@ func (m *LWWMap) Apply(operations []Patch) {
 	defer m.mu.Unlock()
 
 	for _, op := range operations {
+		timestamp := m.clock
+		// user request
+		if op.Timestamp < 0 {
+			timestamp = m.clock
+		}
 		value := Data{
 			Value:     op.Value,
-			Timestamp: op.Timestamp,
+			Timestamp: timestamp, // timestamp less than 0 -- user request
 		}
 		existing, exists := m.store[op.Key]
 		if !exists || existing.Timestamp < op.Timestamp {
 			m.clock++
 			m.store[op.Key] = value
+			log.Printf("Node %s applied operation %v", m.nodeID, op)
 		} else if existing.Timestamp == op.Timestamp {
 			// tie-breaker
 			if op.Value > existing.Value {
 				m.store[op.Key] = value
+				log.Printf("Node %s applied operation %v", m.nodeID, op)
 				m.clock++
 			}
 		}
@@ -84,9 +91,10 @@ func (m *LWWMap) Patch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid method", http.StatusMethodNotAllowed)
 		return
 	}
+	log.Println("New Patch request")
 	var operations []Patch
 	if err := json.NewDecoder(r.Body).Decode(&operations); err != nil {
-		http.Error(w, "Invalid request", http.StatusBadRequest)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -96,10 +104,12 @@ func (m *LWWMap) Patch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *LWWMap) Get(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	if r.Method != http.MethodPost {
 		http.Error(w, "Invalid method", http.StatusMethodNotAllowed)
 		return
 	}
+
+	log.Println("New Get request")
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -171,6 +181,7 @@ func (m *LWWMap) sync() {
 	for {
 		time.Sleep(time.Duration(rand.Intn(3)) * time.Second)
 		log.Println("Syncing with replicas")
+		log.Printf("Current state: %v", m.store)
 		selectedKeys := m.selectRandomKeys(5)
 		operations := make([]Patch, len(selectedKeys))
 
@@ -187,6 +198,7 @@ func (m *LWWMap) sync() {
 		url := "http://" + replica + "/patch"
 		data, _ := json.Marshal(operations)
 		resp, err := http.Post(url, "application/json", bytes.NewReader(data))
+		log.Printf("Sending %d operations to %s", len(operations), replica)
 		if err != nil {
 			log.Printf("Failed to send operations to %s: %v", replica, err)
 			continue
@@ -216,7 +228,7 @@ func main() {
 	lwwMap := NewLWWMap(nodeID, replicas)
 
 	http.HandleFunc("/patch", lwwMap.Patch)
-	http.HandleFunc("/get", lwwMap.Get)
+	http.HandleFunc("/getKey", lwwMap.Get)
 
 	go lwwMap.sync()
 
